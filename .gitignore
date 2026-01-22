@@ -13,6 +13,7 @@
 #Rapid Application Development File
 rad.json
 #Translation Base-file
+.app
 *.g.xlf
 #License-file
 *.flf

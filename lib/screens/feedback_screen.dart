@@ -26,6 +26,10 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
   bool _hasError = false;
   bool _hasStarted = false; // Track if we explicitly started generation
 
+  // Comment input
+  final TextEditingController _commentController = TextEditingController();
+  String? _currentCommentContext; // The user comment that triggered current AI generation
+
   String get _ideaId => widget.ideaData['id'];
   String get _ideaTitle => widget.ideaData['title'];
 
@@ -83,20 +87,49 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
     });
   }
 
-  Future<void> _startAiGeneration() async {
+  Future<void> _startAiGeneration({String? userComment}) async {
     // Start text animation immediately
     _matchTextAnimation();
+
+    // Clear previous ephemeral feedback items
+    setState(() {
+      _feedbackItems.clear();
+    });
 
     try {
       // 1. Select Personas
       final personas = ref.read(selectedPersonasProvider);
 
-      // 2. Call AI Stream
-      final stream = ref
-          .read(aiServiceProvider)
-          .generateResponsesStream(userContent: _ideaTitle, personas: personas);
+      // 2. Build context from thread history if this is a comment
+      String? context;
+      if (userComment != null) {
+        _currentCommentContext = userComment;
+        final ideas = ref.read(ideaRepositoryProvider);
+        final thread = ideas.firstWhere(
+          (i) => i.id == _ideaId,
+          orElse: () => IdeaThread(id: '', title: '', createdAt: DateTime.now()),
+        );
 
-      // 3. Consume Stream
+        // Build context from pinned items (previous conversation)
+        if (thread.pinnedItems.isNotEmpty) {
+          final historyItems = thread.pinnedItems.map((item) {
+            final prefix = item.isUserComment ? '【ユーザーの追加コメント】' : '【${item.authorName}の意見】';
+            return '$prefix ${item.content}';
+          }).join('\n');
+          context = '$historyItems\n\n【ユーザーの新しいコメント】\n$userComment';
+        } else {
+          context = '【ユーザーの新しいコメント】\n$userComment';
+        }
+      }
+
+      // 3. Call AI Stream
+      final stream = ref.read(aiServiceProvider).generateResponsesStream(
+        userContent: _ideaTitle,
+        personas: personas,
+        context: context,
+      );
+
+      // 4. Consume Stream
       await for (final item in stream) {
         if (!mounted) break;
 
@@ -106,7 +139,6 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
 
         // "Buffer" effect: Wait for 3 items before showing the list
         if (_feedbackItems.length == 3 && _isAnimating) {
-          // Add a small delay for dramatic effect if needed, or switch immediately
           setState(() => _isAnimating = false);
         }
       }
@@ -119,6 +151,25 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
         });
       }
     }
+  }
+
+  // Submit a user comment and trigger AI feedback
+  Future<void> _submitComment() async {
+    final comment = _commentController.text.trim();
+    if (comment.isEmpty) return;
+
+    // 1. Save user comment to thread
+    await ref.read(ideaRepositoryProvider.notifier).addUserComment(_ideaId, comment);
+
+    // 2. Clear input
+    _commentController.clear();
+
+    // 3. Start AI generation with the comment as context
+    setState(() {
+      _isAnimating = true;
+      _hasStarted = true;
+    });
+    _startAiGeneration(userComment: comment);
   }
 
   void _matchTextAnimation() {
@@ -158,7 +209,7 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
 
   @override
   void dispose() {
-    // _streamTimer?.cancel(); // No longer needed
+    _commentController.dispose();
     super.dispose();
   }
 
@@ -297,6 +348,64 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
           ),
         ],
       ),
+      // Comment input bar (shown when thread has started)
+      bottomNavigationBar: _hasStarted && !_isAnimating ? _buildCommentInput() : null,
+    );
+  }
+
+  Widget _buildCommentInput() {
+    return Container(
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 8,
+        top: 12,
+        bottom: MediaQuery.of(context).padding.bottom + 12,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _commentController,
+              decoration: InputDecoration(
+                hintText: 'コメントを追加...',
+                hintStyle: TextStyle(color: Colors.grey.shade400),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide.none,
+                ),
+                filled: true,
+                fillColor: const Color(0xFFF5F5F7),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 12,
+                ),
+              ),
+              maxLines: null,
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) => _submitComment(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            onPressed: _submitComment,
+            icon: const Icon(Icons.send_rounded),
+            color: const Color(0xFF4A4A4A),
+            style: IconButton.styleFrom(
+              backgroundColor: const Color(0xFFE5E5EA),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -377,42 +486,26 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
   }
 
   Widget _buildStreamingContent() {
-    // If we have pinned items (revisit), show them?
-    // Actually the current implementation streams into _feedbackItems (ephemeral).
-    // If revisiting, we probably want to see the PINNED items, OR the ephemeral ones if just generated.
-    // The user said: "If nothing added... show button".
-    // If pinned items exist, we should probably show them.
-    // Let's merge: Show pinned items FIRST, then ephemeral items?
-    // Or just switch data source.
-
     final ideas = ref.watch(ideaRepositoryProvider);
     final existingThread = ideas.firstWhere(
       (i) => i.id == _ideaId,
-      orElse:
-          () => IdeaThread(
-            id: '',
-            title: '',
-            createdAt: DateTime.now(),
-          ), // Should not happen
+      orElse: () => IdeaThread(id: '', title: '', createdAt: DateTime.now()),
     );
 
-    // Combine pinned and ephemeral?
-    // Ephemeral items are `AiResponse`. Pinned items are `ThreadItem`.
-    // We need a unified view or just decide what to show.
-    // If _feedbackItems is active (just generated), show them.
-    // If not, show pinnedItems.
+    // Show pinned items first, then ephemeral feedback items
+    final pinnedItems = existingThread.pinnedItems;
+    final bool hasEphemeralItems = _feedbackItems.isNotEmpty;
 
-    final bool showPinned =
-        _feedbackItems.isEmpty && existingThread.pinnedItems.isNotEmpty;
-    final int count =
-        showPinned ? existingThread.pinnedItems.length : _feedbackItems.length;
+    // Calculate total items: Header + Pinned + (Ephemeral or "Get More" button)
+    final int headerCount = 1;
+    final int pinnedCount = pinnedItems.length;
+    final int ephemeralCount = hasEphemeralItems ? _feedbackItems.length : 0;
+    final int moreButtonCount = (pinnedItems.isNotEmpty && !hasEphemeralItems) ? 1 : 0;
+    final int totalCount = headerCount + pinnedCount + ephemeralCount + moreButtonCount;
 
     return ListView.builder(
-      padding: const EdgeInsets.all(24),
-      itemCount:
-          count +
-          1 +
-          (showPinned ? 1 : 0), // +1 for Header, +1 for "More" button if pinned
+      padding: const EdgeInsets.only(left: 24, right: 24, top: 24, bottom: 100),
+      itemCount: totalCount,
       itemBuilder: (context, index) {
         if (index == 0) {
           // Header (Original Idea)
@@ -428,7 +521,6 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
                 Text(
                   _ideaTitle,
                   style: GoogleFonts.notoSerifJp(
-                    // Japanese Serif
                     color: const Color(0xFF333333),
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
@@ -440,8 +532,26 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
           );
         }
 
-        if (showPinned && index == count + 1) {
-          // "Get More Opinions" button at bottom of pinned list
+        // Pinned items section
+        if (index <= pinnedCount) {
+          final pinnedIndex = index - 1;
+          final item = pinnedItems[pinnedIndex];
+
+          // User comment - distinct style
+          if (item.isUserComment) {
+            return _buildUserCommentItem(item);
+          }
+
+          // AI feedback from pinned items
+          return _buildFeedbackItem(
+            content: item.content,
+            authorName: item.authorName,
+            isPinned: true,
+          );
+        }
+
+        // "Get More Opinions" button (shown when no ephemeral items)
+        if (!hasEphemeralItems && index == pinnedCount + 1) {
           return Padding(
             padding: const EdgeInsets.only(top: 20),
             child: Center(
@@ -450,8 +560,6 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
                   setState(() {
                     _isAnimating = true;
                     _hasStarted = true;
-                    // Clear ephemeral just in case, or append?
-                    // Let's just start generation, which adds to _feedbackItems
                   });
                   _startAiGeneration();
                 },
@@ -462,59 +570,159 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
           );
         }
 
-        // Data binding
-        String content;
-        String personaName = "Unknown";
-        String personaId = ""; // Need this for bio
-        Persona? persona;
-
-        if (showPinned) {
-          final item = existingThread.pinnedItems[index - 1];
-          content = item.content;
-          personaName =
-              item.authorName; // We only stored name... uh oh. We need ID to show bio.
-          // Problem: ThreadItem only saved authorName. We can't link back to Persona object easily unless we store ID.
-          // Fallback: Try to find by name or just use a generic icon.
-          try {
-            persona = defaultPersonas.firstWhere((p) => p.name == personaName);
-            personaId = persona.id;
-          } catch (e) {
-            // Fallback
-            personaId = "";
-          }
-        } else {
-          final item = _feedbackItems[index - 1];
-          content = item.content;
-          personaId = item.personaId;
-          personaName = item.personaName;
-        }
-
-        // Find persona details (re-lookup if needed)
-        if (persona == null && personaId.isNotEmpty) {
-          persona = defaultPersonas.firstWhere(
-            (p) => p.id == personaId,
-            orElse: () => defaultPersonas.first,
+        // Ephemeral feedback items (newly generated)
+        final ephemeralIndex = index - pinnedCount - 1;
+        if (ephemeralIndex >= 0 && ephemeralIndex < _feedbackItems.length) {
+          final item = _feedbackItems[ephemeralIndex];
+          return _buildFeedbackItem(
+            content: item.content,
+            authorName: item.personaName,
+            personaId: item.personaId,
+            isPinned: false,
           );
-        } else if (persona == null) {
-          // Absolute fallback
-          persona = defaultPersonas.first;
         }
 
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 24.0),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Persona Icon (Clickable)
-              GestureDetector(
-                onTap:
-                    () => _showBio(
+        return const SizedBox.shrink();
+      },
+    );
+  }
+
+  Widget _buildUserCommentItem(ThreadItem item) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(width: 48), // Offset to align with AI feedback
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF4A4A4A).withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.person_outline,
+                        size: 14,
+                        color: Colors.grey.shade600,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'あなたのコメント',
+                        style: TextStyle(
+                          color: Colors.grey.shade600,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    item.content,
+                    style: const TextStyle(
+                      color: Color(0xFF333333),
+                      fontSize: 15,
+                      height: 1.6,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    ).animate().fadeIn().slideX(begin: 0.1, duration: 400.ms);
+  }
+
+  Widget _buildFeedbackItem({
+    required String content,
+    required String authorName,
+    String? personaId,
+    required bool isPinned,
+  }) {
+    // Find persona details
+    late Persona persona;
+    String pId = personaId ?? '';
+
+    try {
+      if (pId.isNotEmpty) {
+        persona = defaultPersonas.firstWhere((p) => p.id == pId);
+      } else {
+        persona = defaultPersonas.firstWhere((p) => p.name == authorName);
+        pId = persona.id;
+      }
+    } catch (e) {
+      persona = defaultPersonas.first;
+      pId = persona.id;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Persona Icon (Clickable)
+          GestureDetector(
+            onTap: () => _showBio(
+              context,
+              AiResponse(
+                id: '',
+                personaId: pId,
+                personaName: authorName,
+                type: ResponseType.reply,
+                content: content,
+                sentiment: Sentiment.neutral,
+                isRetweeted: false,
+                createdAt: DateTime.now(),
+              ),
+            ),
+            child: Container(
+              margin: const EdgeInsets.only(top: 4, right: 16),
+              child: CircleAvatar(
+                radius: 16,
+                backgroundColor: _getCategoryColor(persona.category).withValues(alpha: 0.1),
+                child: Text(
+                  persona.name[0],
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _getCategoryColor(persona.category),
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // Content
+          Expanded(
+            child: InkWell(
+              onTap: () {
+                context.push(
+                  '/feedback/detail',
+                  extra: {
+                    'ideaData': widget.ideaData,
+                    'content': content,
+                    'personaId': pId,
+                  },
+                );
+              },
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Persona Name
+                  GestureDetector(
+                    onTap: () => _showBio(
                       context,
                       AiResponse(
-                        // Hacky reconstruction for bio
                         id: '',
-                        personaId: personaId,
-                        personaName: personaName,
+                        personaId: pId,
+                        personaName: authorName,
                         type: ResponseType.reply,
                         content: content,
                         sentiment: Sentiment.neutral,
@@ -522,115 +730,53 @@ class _FeedbackScreenState extends ConsumerState<FeedbackScreen> {
                         createdAt: DateTime.now(),
                       ),
                     ),
-                child: Container(
-                  margin: const EdgeInsets.only(top: 4, right: 16),
-                  child: CircleAvatar(
-                    radius: 16,
-                    backgroundColor: _getCategoryColor(
-                      persona!.category,
-                    ).withOpacity(0.1),
                     child: Text(
-                      persona.name[0],
+                      persona.name,
                       style: TextStyle(
+                        color: Colors.grey.shade600,
                         fontSize: 12,
-                        color: _getCategoryColor(persona.category),
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                   ),
-                ),
-              ),
-
-              // Content
-              Expanded(
-                child: InkWell(
-                  onTap: () {
-                    // Start drill down - we probably want to pass ID here too if we want to save drill-down items
-                    // For now keeping it simple as per original scope (saving logic might need update in detail screen too)
-                    // Let's pass the ID map to Detail Screen too
-                    context.push(
-                      '/feedback/detail',
-                      extra: {
-                        'ideaData': widget.ideaData,
-                        'content': content,
-                        'personaId': personaId,
-                      },
-                    );
-                  },
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Persona Name
-                      GestureDetector(
-                        onTap:
-                            () =>
-                                showPinned || persona == null
-                                    ? null
-                                    : _showBio(
-                                      context,
-                                      AiResponse(
-                                        // Hacky reconstruction for bio
-                                        id: '',
-                                        personaId: personaId,
-                                        personaName: personaName,
-                                        type: ResponseType.reply,
-                                        content: content,
-                                        sentiment: Sentiment.neutral,
-                                        isRetweeted: false,
-                                        createdAt: DateTime.now(),
-                                      ),
-                                    ),
-                        child: Text(
-                          persona.name,
-                          style: TextStyle(
-                            color: Colors.grey.shade600,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        content,
-                        style: const TextStyle(
-                          color: Color(0xFF4A4A4A),
-                          fontSize: 15,
-                          height: 1.6,
-                        ),
-                      ),
-                    ],
-                  ),
-                ).animate().fadeIn().slideX(begin: 0.1, duration: 400.ms),
-              ),
-
-              // Checkmark Action
-              IconButton(
-                icon: const Icon(
-                  Icons.check_circle_outline,
-                  color: Color(0xFFB0B0B0),
-                  size: 20,
-                ),
-                selectedIcon: const Icon(
-                  Icons.check_circle,
-                  color: Color(0xFF4A4A4A),
-                  size: 20,
-                ),
-                onPressed: () {
-                  ref
-                      .read(ideaRepositoryProvider.notifier)
-                      .pinItem(_ideaId, content, persona!.name);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('メインスレッドに刻みました'),
-                      duration: Duration(seconds: 1),
+                  const SizedBox(height: 4),
+                  Text(
+                    content,
+                    style: const TextStyle(
+                      color: Color(0xFF4A4A4A),
+                      fontSize: 15,
+                      height: 1.6,
                     ),
-                  );
-                },
+                  ),
+                ],
               ),
-            ],
+            ).animate().fadeIn().slideX(begin: 0.1, duration: 400.ms),
           ),
-        );
-      },
+
+          // Checkmark Action (only for non-pinned items)
+          if (!isPinned)
+            IconButton(
+              icon: const Icon(
+                Icons.check_circle_outline,
+                color: Color(0xFFB0B0B0),
+                size: 20,
+              ),
+              onPressed: () {
+                ref
+                    .read(ideaRepositoryProvider.notifier)
+                    .pinItem(_ideaId, content, persona.name);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('メインスレッドに刻みました'),
+                    duration: Duration(seconds: 1),
+                  ),
+                );
+              },
+            )
+          else
+            const SizedBox(width: 48), // Placeholder for alignment
+        ],
+      ),
     );
   }
 }

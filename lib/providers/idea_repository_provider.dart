@@ -8,17 +8,20 @@ class ThreadItem {
   final String content;
   final String authorName; // Persona or User
   final DateTime timestamp;
+  final bool isUserComment; // true if this is a user's own comment
 
   ThreadItem({
     required this.content,
     required this.authorName,
     required this.timestamp,
+    this.isUserComment = false,
   });
 
   Map<String, dynamic> toJson() => {
     'content': content,
     'authorName': authorName,
     'timestamp': timestamp.toIso8601String(),
+    'isUserComment': isUserComment,
   };
 
   factory ThreadItem.fromJson(Map<String, dynamic> json) {
@@ -26,6 +29,7 @@ class ThreadItem {
       content: json['content'],
       authorName: json['authorName'] ?? 'Unknown',
       timestamp: DateTime.parse(json['timestamp']),
+      isUserComment: json['isUserComment'] ?? false,
     );
   }
 }
@@ -115,6 +119,25 @@ class IdeaRepositoryNotifier extends StateNotifier<List<IdeaThread>> {
               content: content,
               authorName: authorName,
               timestamp: DateTime.now(),
+              isUserComment: false,
+            );
+            return idea.copyWith(pinnedItems: [...idea.pinnedItems, newItem]);
+          }
+          return idea;
+        }).toList();
+    await _save();
+  }
+
+  // Add a user's own comment to a thread
+  Future<void> addUserComment(String ideaId, String content) async {
+    state =
+        state.map((idea) {
+          if (idea.id == ideaId) {
+            final newItem = ThreadItem(
+              content: content,
+              authorName: 'あなた',
+              timestamp: DateTime.now(),
+              isUserComment: true,
             );
             return idea.copyWith(pinnedItems: [...idea.pinnedItems, newItem]);
           }

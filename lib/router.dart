@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'providers/auth_provider.dart';
 import 'screens/home_screen.dart';
+import 'screens/feedback_screen.dart';
+import 'screens/feedback_detail_screen.dart';
 
 /// 自動匿名ログイン状態
 final autoSignInProvider = FutureProvider<bool>((ref) async {
@@ -31,10 +33,28 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/',
         builder: (context, state) => const _AutoSignInWrapper(),
       ),
+      GoRoute(
+        path: '/feedback',
+        builder: (context, state) {
+          final extra = state.extra as Map<String, dynamic>? ?? {};
+          return FeedbackScreen(ideaData: extra);
+        },
+      ),
+      GoRoute(
+        path: '/feedback/detail',
+        builder: (context, state) {
+          final extra = state.extra as Map<String, dynamic>? ?? {};
+          return FeedbackDetailScreen(
+            originalFeedback: extra['content'] ?? '',
+            ideaData: extra['ideaData'],
+            personaId: extra['personaId'],
+          );
+        },
+      ),
     ],
     errorBuilder:
         (context, state) => Scaffold(
-          backgroundColor: const Color(0xFF1a1a2e),
+          backgroundColor: const Color(0xFFF5F5F7),
           body: Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -42,13 +62,13 @@ final routerProvider = Provider<GoRouter>((ref) {
                 const Icon(Icons.error_outline, color: Colors.red, size: 64),
                 const SizedBox(height: 16),
                 const Text(
-                  'エラーが発生しました',
-                  style: TextStyle(color: Colors.white, fontSize: 18),
+                  'Error Occurred',
+                  style: TextStyle(color: Color(0xFF4A4A4A), fontSize: 18),
                 ),
                 const SizedBox(height: 24),
                 ElevatedButton(
                   onPressed: () => context.go('/'),
-                  child: const Text('再試行'),
+                  child: const Text('Retry'),
                 ),
               ],
             ),
@@ -68,19 +88,20 @@ class _AutoSignInWrapper extends ConsumerWidget {
     return autoSignIn.when(
       loading:
           () => const Scaffold(
-            backgroundColor: Color(0xFF1a1a2e),
+            backgroundColor: Color(0xFFF5F5F7),
             body: Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  CircularProgressIndicator(color: Colors.purple),
+                  CircularProgressIndicator(color: Color(0xFF4A4A4A)),
                   SizedBox(height: 24),
                   Text(
-                    'Thinker',
+                    'SCLUP',
                     style: TextStyle(
-                      color: Colors.white,
+                      color: Color(0xFF4A4A4A),
                       fontSize: 32,
                       fontWeight: FontWeight.bold,
+                      letterSpacing: 2.0,
                     ),
                   ),
                 ],
@@ -89,11 +110,11 @@ class _AutoSignInWrapper extends ConsumerWidget {
           ),
       error:
           (e, _) => Scaffold(
-            backgroundColor: const Color(0xFF1a1a2e),
+            backgroundColor: const Color(0xFFF5F5F7),
             body: Center(
               child: Text(
-                'エラー: $e',
-                style: const TextStyle(color: Colors.white),
+                'Error: $e',
+                style: const TextStyle(color: Color(0xFF4A4A4A)),
               ),
             ),
           ),
@@ -102,9 +123,12 @@ class _AutoSignInWrapper extends ConsumerWidget {
           return const HomeScreen();
         }
         return const Scaffold(
-          backgroundColor: Color(0xFF1a1a2e),
+          backgroundColor: Color(0xFFF5F5F7),
           body: Center(
-            child: Text('ログインに失敗しました', style: TextStyle(color: Colors.white)),
+            child: Text(
+              'Login Failed',
+              style: TextStyle(color: Color(0xFF4A4A4A)),
+            ),
           ),
         );
       },

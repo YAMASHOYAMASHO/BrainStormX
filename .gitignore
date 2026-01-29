@@ -91,3 +91,7 @@ app.*.map.json
 
 # Windows
 /windows/flutter/ephemeral/
+
+# Firebase configuration files (contain API keys)
+lib/firebase_options.dart
+.firebase/

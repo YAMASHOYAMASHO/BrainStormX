@@ -25,6 +25,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:YOUR_MESSAGING_SENDER_ID:ios:YOUR_APP_ID</string>
+	<string>1:YOUR_MESSAGING_SENDER_ID:darwin:YOUR_APP_ID</string>
 </dict>
 </plist>

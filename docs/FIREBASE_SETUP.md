@@ -6,7 +6,7 @@
 
 以下のファイルをセットアップする必要があります：
 
-1. **flutter_options.dart** - Dart/Flutter用のFirebase設定
+1. **firebase_options.dart** - Dart/Flutter用のFirebase設定
 2. **google-services.json** - Android用のFirebase設定
 3. **GoogleService-Info.plist** - iOS/macOS用のFirebase設定
 
